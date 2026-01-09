@@ -1,8 +1,8 @@
 fastapi
 uvicorn
+yt-dlp
 google-auth
 google-auth-oauthlib
 google-api-python-client
-yt-dlp
 python-multipart
 jinja2
