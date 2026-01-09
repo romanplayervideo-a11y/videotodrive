@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CloudBolt Uploader</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root { --primary: #6366f1; --bg: #0f172a; --card: #1e293b; --text: #f8fafc; }
+        body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--text); margin: 0; min-height: 100vh; }
+        nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 5%; border-bottom: 1px solid #334155; }
+        .logo { font-size: 1.5rem; font-weight: 700; background: linear-gradient(90deg, #818cf8, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .logout-btn { background: #ef4444; border: none; color: white; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; }
+        .hero { display: flex; flex-direction: column; align-items: center; padding: 80px 20px; text-align: center; }
+        .card { background: var(--card); border: 1px solid #334155; border-radius: 24px; padding: 40px; width: 100%; max-width: 450px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1); }
+        input { width: 100%; padding: 14px; border-radius: 12px; border: 1px solid #334155; background: #0f172a; color: white; margin-bottom: 20px; box-sizing: border-box; outline: none; }
+        .btn-main { width: 100%; padding: 14px; border-radius: 12px; border: none; background: var(--primary); color: white; font-weight: 600; cursor: pointer; transition: 0.3s; }
+        .btn-main:hover { opacity: 0.9; transform: translateY(-2px); }
+        #progress-box { display: none; margin-top: 30px; }
+        .bar-bg { background: #334155; height: 10px; border-radius: 5px; overflow: hidden; margin: 15px 0; }
+        .bar-fill { width: 0%; height: 100%; background: #10b981; transition: 0.5s; }
+        #toast { visibility: hidden; min-width: 250px; background: #334155; color: white; text-align: center; border-radius: 12px; padding: 16px; position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); z-index: 1000; box-shadow: 0 10px 15px rgba(0,0,0,0.3); border: 1px solid var(--primary); }
+        #toast.show { visibility: visible; animation: fadein 0.5s; }
+        @keyframes fadein { from {bottom: 0; opacity: 0;} to {bottom: 30px; opacity: 1;} }
+    </style>
+</head>
+<body>
+
+<nav>
+    <div class="logo">CloudBolt Uploader</div>
+    <button id="logout-btn" class="logout-btn" onclick="logout()" style="display:none;">Logout</button>
+</nav>
+
+<div class="hero">
+    <div id="login-section" class="card">
+        <h2>Connect Drive</h2>
+        <p style="color: #94a3b8">Start remote uploading videos directly to your cloud storage.</p>
+        <button class="btn-main" onclick="login()">Connect Google Account</button>
+    </div>
+
+    <div id="upload-section" class="card" style="display:none;">
+        <h2>Remote Upload</h2>
+        <input type="text" id="url-input" placeholder="Paste Video URL Here...">
+        <button id="start-btn" class="btn-main" onclick="handleUpload()">Launch to Drive</button>
+
+        <div id="progress-box">
+            <div style="display:flex; justify-content: space-between; font-size: 0.8rem">
+                <span id="status-txt">Preparing...</span>
+                <span id="percent-txt">0%</span>
+            </div>
+            <div class="bar-bg"><div id="bar" class="bar-fill"></div></div>
+        </div>
+    </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+    const loginSection = document.getElementById('login-section');
+    const uploadSection = document.getElementById('upload-section');
+    const logoutBtn = document.getElementById('logout-btn');
+
+    // Page Load Logic
+    window.onload = function() {
+        const sid = localStorage.getItem('session_id');
+        if (sid) {
+            const fd = new FormData();
+            fd.append('session_id', sid);
+            fetch('/check_session', {method:'POST', body:fd})
+            .then(r => r.ok ? showApp() : showLogin());
+        } else {
+            showLogin();
+        }
+    };
+
+    function showApp() {
+        loginSection.style.display = 'none';
+        uploadSection.style.display = 'block';
+        logoutBtn.style.display = 'block';
+    }
+
+    function showLogin() {
+        localStorage.removeItem('session_id');
+        loginSection.style.display = 'block';
+        uploadSection.style.display = 'none';
+        logoutBtn.style.display = 'none';
+    }
+
+    function login() {
+        fetch("/login").then(r => r.json()).then(d => window.location.href = d.auth_url);
+    }
+
+    function logout() {
+        showLogin();
+        notify("Logged out successfully");
+    }
+
+    function notify(msg) {
+        const t = document.getElementById("toast");
+        t.innerText = msg;
+        t.className = "show";
+        setTimeout(() => { t.className = ""; }, 3000);
+    }
+
+    function handleUpload() {
+        const url = document.getElementById('url-input').value;
+        const sid = localStorage.getItem('session_id');
+        if(!url) return notify("Please paste a URL");
+
+        const btn = document.getElementById('start-btn');
+        btn.disabled = true;
+        btn.innerText = "Processing...";
+
+        const fd = new FormData();
+        fd.append('video_url', url);
+        fd.append('session_id', sid);
+
+        fetch('/upload', {method:'POST', body:fd})
+        .then(r => r.json())
+        .then(data => {
+            if(data.task_id) track(data.task_id);
+            else { notify(data.error); btn.disabled = false; btn.innerText = "Launch to Drive"; }
+        });
+    }
+
+    function track(tid) {
+        document.getElementById('progress-box').style.display = 'block';
+        const es = new EventSource(`/progress/${tid}`);
+        es.onmessage = function(e) {
+            const d = JSON.parse(e.data);
+            document.getElementById('bar').style.width = d.percent + '%';
+            document.getElementById('percent-txt').innerText = d.percent + '%';
+            document.getElementById('status-txt').innerText = d.status;
+
+            if(d.status === "Completed") {
+                es.close();
+                notify("🚀 Upload Finished!");
+                document.getElementById('start-btn').disabled = false;
+                document.getElementById('start-btn').innerText = "Upload Another";
+            }
+            if(d.status.includes("Error")) {
+                es.close();
+                notify("❌ " + d.status);
+                document.getElementById('start-btn').disabled = false;
+            }
+        };
+    }
+</script>
+</body>
+</html>
