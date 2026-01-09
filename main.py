@@ -4,14 +4,12 @@ import uuid
 import asyncio
 import os
 import threading
+import requests
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-import io
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -61,28 +59,55 @@ async def progress_endpoint(task_id: str):
 def stream_to_drive(video_url, creds_json, task_id):
     process = None
     try:
-        progress_data[task_id] = {"status": "Starting Cloud Stream...", "percent": 10}
-        creds = Credentials.from_authorized_user_info(json.loads(creds_json))
-        drive = build("drive", "v3", credentials=creds)
+        progress_data[task_id] = {"status": "Initializing Engine...", "percent": 5}
+        creds_data = json.loads(creds_json)
+        access_token = creds_data['token']
 
-        # High-speed pipe command
+        # 1. Start yt-dlp to get the video stream
         process = subprocess.Popen(
-            ["yt-dlp", "-f", "best", "--no-part", "--no-buffer", "--user-agent", "Mozilla/5.0", "-o", "-", video_url],
+            ["yt-dlp", "-f", "best", "--no-part", "--no-buffer", "-o", "-", video_url],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0
         )
 
-        # FIXED: resumable=False avoids the 'Illegal Seek' error on Linux/Render
-        # Simple upload mode handles streams perfectly
-        media = MediaIoBaseUpload(process.stdout, mimetype="video/mp4", resumable=False)
-        file_metadata = {"name": f"CloudBolt_Video_{task_id}.mp4"}
-        
-        progress_data[task_id] = {"status": "Transferring Data (0-100%)...", "percent": 50}
-        
-        # Execute Simple Upload
-        request = drive.files().create(body=file_metadata, media_body=media, fields="id")
-        request.execute()
+        # 2. Metadata for Google Drive
+        metadata = {
+            'name': f'CloudBolt_Video_{task_id}.mp4',
+            'mimeType': 'video/mp4'
+        }
 
-        progress_data[task_id] = {"status": "Completed", "percent": 100}
+        # 3. Use Requests with a custom generator to avoid "Illegal Seek"
+        # This is the "Open Source" trick for unlimited streaming
+        def file_generator():
+            while True:
+                chunk = process.stdout.read(512 * 1024) # 512KB chunks
+                if not chunk:
+                    break
+                yield chunk
+
+        headers = {"Authorization": f"Bearer {access_token}"}
+        
+        # We use a Multipart Upload approach that doesn't require Content-Length
+        # This is why it works for all URLs regardless of size
+        progress_data[task_id] = {"status": "Streaming Byte-by-Byte...", "percent": 50}
+        
+        files = {
+            'metadata': (None, json.dumps(metadata), 'application/json; charset=UTF-8'),
+            'file': (metadata['name'], file_generator(), 'video/mp4')
+        }
+
+        # Sending the request - This will stay open until yt-dlp finishes
+        r = requests.post(
+            "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+            headers=headers,
+            files=files,
+            stream=True
+        )
+
+        if r.status_code in [200, 201]:
+            progress_data[task_id] = {"status": "Completed", "percent": 100}
+        else:
+            progress_data[task_id] = {"status": f"Cloud Error: {r.status_code}", "percent": 0}
+
     except Exception as e:
         progress_data[task_id] = {"status": f"Error: {str(e)}", "percent": 0}
     finally:
