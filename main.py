@@ -18,7 +18,7 @@ templates = Jinja2Templates(directory="templates")
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive"]
 CLIENT_SECRETS_FILE = "credentials.json"
-REDIRECT_URI = "https://your-app-name.koyeb.app/oauth/callback" # Ye baad mein change hoga
+REDIRECT_URI = "https://videotodrive.onrender.com/oauth/callback" # Ye baad mein change hoga
 
 progress_data = {}
 user_tokens = {}
@@ -93,4 +93,5 @@ async def upload(video_url: str = Form(...), session_id: str = Form(...)):
         return JSONResponse(status_code=401, content={"error": "Login Expired"})
     task_id = str(uuid.uuid4())[:8]
     threading.Thread(target=stream_to_drive, args=(video_url, user_tokens[session_id], task_id)).start()
+
     return {"task_id": task_id}
